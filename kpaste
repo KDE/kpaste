@@ -1,0 +1,597 @@
+#!/usr/bin/env python
+'''kpaste - a cli frontend for the paste.kde.org pastebin'''
+#
+# Copyright 2011 Tirtha Chatterjee <tirtha.p.chatterjee@gmail.com>
+# This file is part of the KDE project
+#
+# This program extensively reuses code from fpaste, command-line
+# paste utility for fpaste.org, a pastebin website
+# Copyright 2008, 2010 Fedora Unity Project (http://fedoraunity.org)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+VERSION = '0.0.1'
+USER_AGENT = 'kpaste/' + VERSION
+
+import os, sys, urllib, urllib2, subprocess, json, getpass
+from optparse import OptionParser, OptionGroup, SUPPRESS_HELP
+
+def is_text(text, maxCheck = 100, pctPrintable = 0.75):
+    '''returns true if maxCheck evenly distributed chars in text are >= pctPrintable% text chars'''
+    # e.g.: /bin/* ranges between 19% and 42% printable
+    from string import printable
+    nchars = len(text)
+    if nchars == 0:
+        return False
+    ncheck = min(nchars, maxCheck)
+    inc = float(nchars)/ncheck
+    i = 0.0
+    nprintable = 0
+    while i < nchars:
+        if text[int(i)] in printable:
+            nprintable += 1
+        i += inc
+    pct = float(nprintable) / ncheck
+    return (pct >= pctPrintable)
+
+
+def confirm(prompt = "OK?"):
+    '''prompt user for yes/no input and return True or False'''
+    prompt += " [y/N]: "
+    try:
+        ans = raw_input(prompt)
+    except EOFError:    # already read sys.stdin and hit EOF
+        # rebind sys.stdin to user tty (unix-only)
+        try:
+            mytty = os.ttyname(sys.stdout.fileno())
+            sys.stdin = open(mytty)
+            ans = raw_input()
+        except:
+            print >> sys.stderr, "could not rebind sys.stdin to %s after sys.stdin EOF" % mytty
+            return False
+
+    if ans.lower().startswith("y"):
+        return True
+    else:
+        return False
+
+
+def paste(text, options, passw):
+    '''send text to paste.kde.org and return the URL'''
+    import re
+    if not text:
+        print >> sys.stderr, "No text to send."
+        return False
+
+    if options.password and passw != None and passw != "":
+        params = urllib.urlencode({'paste_project': options.project, 'paste_user': options.nick, 'paste_password': passw, 'paste_private': 'yes', 'paste_lang': options.lang, 'paste_data': text, 'paste_expire': options.expires, 'api_submit': 'true', 'mode': 'json'})
+    else:
+        params = urllib.urlencode({'paste_project': options.project, 'paste_user': options.nick, 'paste_lang': options.lang, 'paste_data': text, 'paste_expire': options.expires, 'api_submit': 'true', 'mode': 'json'})
+    pasteSizeKiB = len(params)/1024.0
+
+    # verify that it's most likely *non-binary* data being sent.
+    if not is_text(text):
+        print >> sys.stderr, "WARNING: your paste looks a lot like binary data instead of text."
+        if not confirm("Send binary data anyway?"):
+            return False
+
+    if options.get:
+        req = urllib2.Request(url='http://paste.kde.org/index.php?' + params, headers={'User-agent': USER_AGENT})
+    else:
+        req = urllib2.Request(url='http://paste.kde.org/index.php', data=params, headers={'User-agent': USER_AGENT})
+
+    if options.proxy:
+        if options.debug:
+            print >> sys.stderr, "Using proxy: %s" % options.proxy
+        req.set_proxy(options.proxy, 'http')
+
+    print >> sys.stderr, "Uploading (%.1fKiB)..." % pasteSizeKiB
+
+    f = None
+    try:
+        f = urllib2.urlopen(req)
+    except IOError, e:
+        if hasattr(e, 'reason'):
+            print >> sys.stderr, "Error Uploading: %s" % e.reason
+        elif hasattr(e, 'code'):
+            print >> sys.stderr, "Server Error: %d - %s" % (e.code, e.msg)
+            if options.debug and f != None:
+                print f.read()
+        return False
+
+    ##url = f.geturl()
+    #returnData = f.read()
+    #j = json.JSONDecoder()
+    #result = json.JSONDecoder.decode(j, returnData)
+    #print f.read()
+    try:
+        result = json.load(f)
+    except ValueError:
+        print 'No reply from server. This may be because of a connectivity issue'
+        return False
+    try:
+        url = "http://paste.kde.org/" + result['result']['id']
+        if options.password:
+            url += '/' + result['result']['hash']
+        return url
+    except KeyError:
+        try:
+            reason = result['result']['error']
+            if reason == 'err_nothing_to_do':
+                print 'Nothin to do.'
+            elif reason == 'err_author_numeric':
+                print 'Paste failed. The paste author\'s alias should be alphanumeric'
+            elif reason == 'err_save_error':
+                print 'An error occured on the server while saving the paste.'
+            else:
+                print 'An unknown error occured'
+        except KeyError:
+            print 'An unknown error occured'
+        if options.debug:
+            print f.read()
+        return False
+
+
+def sysinfo(show_stderr = False, show_successful_cmds = True, show_failed_cmds = True):
+    '''returns commonly requested system info'''
+    # 'ps' output below has been anonymized: -n for uid vs username, and -c for short processname
+
+    # cmd name, command, command2 fallback, command3 fallback, ...
+    cmdlist = [
+        ('OS Release',         '''lsb_release -ds''', '''cat /etc/*-release | uniq''', 'cat /etc/issue', 'cat /etc/motd'),
+        ('Kernel',             '''uname -r ; cat /proc/cmdline'''),
+        ('Desktop(s) Running', '''ps -eo comm= | egrep '(gnome-session|kdeinit|xfce.?-session|fluxbox|blackbox|hackedbox|ratpoison|enlightenment|icewm-session|od-session|wmaker|wmx|openbox-lxde|openbox-gnome-session|openbox-kde-session|mwm|e16|fvwm|xmonad|sugar-session)' '''),
+        ('Desktop(s) Installed', '''ls -m /usr/share/xsessions/ | sed 's/\.desktop//g' '''),
+        ('CPU Model',          '''grep 'model name' /proc/cpuinfo | awk -F: '{print $2}' | uniq -c | sed -re 's/^ +//' ''', '''grep 'model name' /proc/cpuinfo'''),
+        ('64-bit Support',     '''grep -q ' lm ' /proc/cpuinfo && echo Yes || echo No'''),
+        ('Hardware Virtualization Support', '''egrep -q '(vmx|svm)' /proc/cpuinfo && echo Yes || echo No'''),
+        ('Load average',       '''uptime'''),
+        ('Memory usage',       '''free -m''', 'free'),
+        #('Top',                '''top -n1 -b | head -15'''),
+        ('Top 5 CPU hogs',     '''ps axuScnh | awk '$2!=''' + str(os.getpid()) + '''' | sort -rnk3 | head -5'''),
+        ('Top 5 Memory hogs',  '''ps axuScnh | sort -rnk4 | head -5'''),
+        ('Disk space usage',   '''df -hT''', 'df -h', 'df'),
+        ('Block devices',      '''blkid''', '''/sbin/blkid'''),
+        ('PCI devices',        '''lspci''', '''/sbin/lspci'''),
+        ('USB devices',        '''lsusb''', '''/sbin/lsusb'''),
+        ('DRM Information',    '''grep drm /var/log/dmesg'''),
+        ('Xorg modules',       '''grep LoadModule /var/log/Xorg.0.log | cut -d \\" -f 2 | xargs'''),
+        ('GL Support',         '''glxinfo | egrep "OpenGL version|OpenGL renderer"'''),
+        ('Xorg errors',        '''grep '^\[.*(EE)' /var/log/Xorg.0.log'''),
+        ('Kernel buffer tail', '''dmesg | tail'''),
+        ('Last few reboots',   '''last -x -n10 reboot runlevel''')]
+    si = []
+
+    print >> sys.stderr, "Gathering system info",
+    for cmds in cmdlist:
+        cmdname = cmds[0]
+        cmd = ""
+        for cmd in cmds[1:]:
+            sys.stderr.write('.') # simple progress feedback
+            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (out, err) = p.communicate()
+            if p.returncode == 0 and out:
+                break
+            else:
+                if show_stderr:
+                    print >> sys.stderr, "sysinfo Error: the cmd \"%s\" returned %d with stderr: %s" % (cmd, p.returncode, err)
+                    print >> sys.stderr, "Trying next fallback cmd..."
+        if out:
+            if show_successful_cmds:
+                si.append( ('%s (%s)' % (cmdname, cmd), out) )
+            else:
+                si.append( ('%s' % cmdname, out) )
+        else:
+            if show_failed_cmds:
+                si.append( ('%s (failed: "%s")' % (cmdname, '" AND "'.join(cmds[1:])), out) )
+            else:
+                si.append( ('%s' % cmdname, out) )
+
+    # public SMOLT url
+    try:
+        sys.path.append('/usr/share/smolt/client')
+        from smolt import get_profile_link, getPubUUID
+        from smolt_config import get_config_attr
+        smoonurl = get_config_attr("SMOON_URL", "http://smolts.org/")
+        pubuuid = getPubUUID()
+        puburl = get_profile_link(smoonurl, pubuuid)+os.linesep
+    except:
+        puburl = None
+    si.insert(2, ('Smolt Profile URL', puburl) )
+
+    sys.stderr.write("\n")
+
+    # return in readable indented format
+    sistr = "=== kpaste %s System Information (kpaste --sysinfo) ===\n" % VERSION
+    for cmdname, output in si:
+        sistr += "* %s:\n" % cmdname
+        if not output:
+            sistr += "     N/A\n\n"
+        else:
+            for line in output.split('\n'):
+                sistr += "     %s\n" % line
+
+    return sistr
+
+
+def generate_man_page():
+    '''TODO: generate man page from usage'''
+    pass
+
+
+def main():
+    validSyntaxOpts = {
+        'text': 'Plain text',
+        '4cs': 'GADV 4CS',
+        '6502acme': 'ACME Cross Asm',
+        '6502kickass': 'Kick Asm',
+        '6502tasm': 'TASM/64TASS 1.46 Asm',
+        '68000devpac': 'HiSoft Devpac ST 2 Asm',
+        'abap': 'ABAP',
+        'actionscript': 'ActionScript',
+        'actionscript3': 'ActionScript 3',
+        'ada': 'Ada',
+        'algol68': 'ALGOL 68',
+        'apache': 'Apache configuration',
+        'applescript': 'AppleScript',
+        'apt_sources': 'Apt sources',
+        'asm': 'ASM',
+        'asp': 'ASP',
+        'autoconf': 'Autoconf',
+        'autohotkey': 'Autohotkey',
+        'autoit': 'AutoIt',
+        'avisynth': 'AviSynth',
+        'awk': 'awk',
+        'bash': 'Bash',
+        'basic4gl': 'Basic4GL',
+        'bf': 'Brainfuck',
+        'bibtex': 'BibTeX',
+        'blitzbasic': 'BlitzBasic',
+        'bnf': 'bnf',
+        'boo': 'Boo',
+        'c': 'C',
+        'c_loadrunner': 'C (LoadRunner)',
+        'c_mac': 'C (Mac)',
+        'caddcl': 'CAD DCL',
+        'cadlisp': 'CAD Lisp',
+        'cfdg': 'CFDG',
+        'cfm': 'ColdFusion',
+        'chaiscript': 'ChaiScript',
+        'cil': 'CIL',
+        'clojure': 'Clojure',
+        'cmake': 'CMake',
+        'cobol': 'COBOL',
+        'cpp': 'C++',
+        'cpp-qt': '  C++ (Qt)',
+        'csharp': 'C#',
+        'css': 'CSS',
+        'cuesheet': 'Cuesheet',
+        'd': 'D',
+        'dcs': 'DCS',
+        'delphi': 'Delphi',
+        'diff': 'Diff',
+        'div': 'DIV',
+        'dos': 'DOS',
+        'dot': 'dot',
+        'e': 'E',
+        'ecmascript': 'ECMAScript',
+        'eiffel': 'Eiffel',
+        'email': 'eMail (mbox)',
+        'epc': 'EPC',
+        'erlang': 'Erlang',
+        'f1': 'Formula One',
+        'falcon': 'Falcon',
+        'fo': 'FO (abas-ERP)',
+        'fortran': 'Fortran',
+        'freebasic': 'FreeBasic',
+        'fsharp': 'F#',
+        'gambas': 'GAMBAS',
+        'gdb': 'GDB',
+        'genero': 'genero',
+        'genie': 'Genie',
+        'gettext': 'GNU Gettext',
+        'glsl': 'glSlang',
+        'gml': 'GML',
+        'gnuplot': 'Gnuplot',
+        'go': 'Go',
+        'groovy': 'Groovy',
+        'gwbasic': 'GwBasic',
+        'haskell': 'Haskell',
+        'hicest': 'HicEst',
+        'hq9plus': 'HQ9+',
+        'html4strict': 'HTML',
+        'icon': 'Icon',
+        'idl': 'Uno Idl',
+        'ini': 'INI',
+        'inno': 'Inno',
+        'intercal': 'INTERCAL',
+        'io': 'Io',
+        'j': 'J',
+        'java': 'Java',
+        'java5': 'J2SE',
+        'javascript': 'Javascript',
+        'jquery': 'jQuery',
+        'kixtart': 'KiXtart',
+        'klonec': 'KLone C',
+        'klonecpp': 'KLone C++',
+        'latex': 'LaTeX',
+        'lb': 'Liberty BASIC',
+        'lisp': 'Lisp',
+        'locobasic': 'Locomotive Basic',
+        'logtalk': 'Logtalk',
+        'lolcode': 'LOLcode',
+        'lotusformulas': 'Lotus Notes',
+        'lotusscript': 'LotusScript',
+        'lscript': 'LScript',
+        'lsl2': 'LSL2',
+        'lua': 'Lua',
+        'm68k': 'Motorola 68000 Asm',
+        'magiksf': 'MagikSF',
+        'make': 'GNU make',
+        'mapbasic': 'MapBasic',
+        'matlab': 'Matlab M',
+        'mirc': 'mIRC Scripting',
+        'mmix': 'MMIX',
+        'modula2': 'Modula-2',
+        'modula3': 'Modula-3',
+        'mpasm': 'Microchip Asm',
+        'mxml': 'MXML',
+        'mysql': 'MySQL',
+        'newlisp': 'newlisp',
+        'nsis': 'NSIS',
+        'oberon2': 'Oberon-2',
+        'objc': 'Objective-C',
+        'objeck': 'Objeck',
+        'ocaml': 'OCaml',
+        'ocaml-brief': '  OCaml (brief)',
+        'oobas': 'OpenOffice.org Basic',
+        'oracle11': 'Oracle 11 SQL',
+        'oracle8': 'Oracle 8 SQL',
+        'oxygene': 'Oxygene (Delphi Prism)',
+        'oz': 'OZ',
+        'pascal': 'Pascal',
+        'pcre': 'PCRE',
+        'per': 'per',
+        'perl': 'Perl',
+        'perl6': 'Perl 6',
+        'pf': 'OpenBSD Packet Filter',
+        'php': 'PHP',
+        'php-brief': '  PHP (brief)',
+        'pic16': 'PIC16',
+        'pike': 'Pike',
+        'pixelbender': 'Pixel Bender 1.0',
+        'plsql': 'PL/SQL',
+        'postgresql': 'PostgreSQL',
+        'povray': 'POVRAY',
+        'powerbuilder': 'PowerBuilder',
+        'powershell': 'PowerShell',
+        'progress': 'Progress',
+        'prolog': 'Prolog',
+        'properties': 'PROPERTIES',
+        'providex': 'ProvideX',
+        'purebasic': 'PureBasic',
+        'python': 'Python',
+        'q': 'q/kdb+',
+        'qbasic': 'QBasic/QuickBASIC',
+        'rails': 'Rails',
+        'rebol': 'REBOL',
+        'reg': 'Microsoft Registry',
+        'robots': 'robots.txt',
+        'rpmspec': 'RPM Specification File',
+        'rsplus': 'R / S+',
+        'ruby': 'Ruby',
+        'sas': 'SAS',
+        'scala': 'Scala',
+        'scheme': 'Scheme',
+        'scilab': 'SciLab',
+        'sdlbasic': 'sdlBasic',
+        'smalltalk': 'Smalltalk',
+        'smarty': 'Smarty',
+        'sql': 'SQL',
+        'systemverilog': 'SystemVerilog',
+        'tcl': 'TCL',
+        'teraterm': 'Tera Term Macro',
+        'thinbasic': 'thinBasic',
+        'tsql': 'T-SQL',
+        'typoscript': 'TypoScript',
+        'unicon': 'Unicon',
+        'vala': 'Vala',
+        'vb': 'Visual Basic',
+        'vbnet': 'VB.NET',
+        'verilog': 'Verilog',
+        'vhdl': 'VHDL',
+        'vim': 'Vim Script',
+        'visualfoxpro': 'Visual Fox Pro',
+        'visualprolog': 'Visual Prolog',
+        'whitespace': 'Whitespace',
+        'whois': 'Whois (RPSL format)',
+        'winbatch': 'Winbatch',
+        'xbasic': 'XBasic',
+        'xml': 'XML',
+        'xorg_conf': 'Xorg configuration',
+        'xpp': 'X++',
+        'z80': 'ZiLOG Z80 Asm',
+        'zxbasic': 'ZXBasic'}
+    validClipboardSelectionOpts = [ 'primary', 'secondary', 'clipboard' ]
+    ext2lang_map = { 'asm':'asm' , 'sh':'bash', 'bash':'bash', 'bat':'winbatch', 'c':'c', 'h':'cpp', 'cpp':'cpp-qt', 'cxx':'cpp', 'hxx':'cpp', 'css':'css', 'html':'html4strict', 'htm':'html4strict', 'ini':'ini', 'java':'java', 'js':'javascript', 'pl':'perl', 'php':'php', 'php3':'php', 'py':'python', 'rb':'ruby', 'sql':'sql', 'tcl':'tcl', 'vim':'vim', 'xml':'xml' }
+
+    usage = """\
+Usage: %prog [OPTION]... [FILE]...
+  send text file(s), stdin, or clipboard to the http://kpaste.org pastebin and return the URL.
+
+Examples:
+  %prog file1.txt file2.txt
+  dmesg | %prog
+  (prog1; prog2; prog3) | kpaste
+  %prog --sysinfo --confirm
+  %prog -n codemonkey -p kpaste -l python kpaste"""
+
+    parser = OptionParser(usage=usage, version='%prog '+VERSION)
+    parser.add_option('', '--debug', dest='debug', help=SUPPRESS_HELP, action="store_true", default=False)
+    parser.add_option('', '--proxy', dest='proxy', help=SUPPRESS_HELP)
+
+    # pastebin-specific options first
+    pasteKDEOrg_group = OptionGroup(parser, "paste.kde.org Options")
+    pasteKDEOrg_group.add_option('-n', '--nick', dest='nick', help='your username', metavar='"USERNAME"')
+    pasteKDEOrg_group.add_option('-p', '--project', dest='project', help='project related to the paste, if any', metavar='"PROJECT"')
+    pasteKDEOrg_group.add_option('-l', '--language', dest='lang', help='language of content for syntax highlighting; default is "%default"; use "fpaste -l list" to show all ' + str(len(validSyntaxOpts)) + ' supported langs', metavar='"LANGUAGE"')
+    pasteKDEOrg_group.add_option('-t', '--expires', dest='expires', help='time before paste is removed; default is %default seconds', metavar='EXPIRES')
+    pasteKDEOrg_group.add_option('-x', '--password', dest='password', help='use a password', action="store_true", default=False)
+
+    parser.add_option_group(pasteKDEOrg_group)
+    # other options
+    kpasteProg_group = OptionGroup(parser, "Input/Output Options")
+    kpasteProg_group.add_option('-i', '--clipin', dest='clipin', help='read paste text from current X clipboard selection', action="store_true", default=False)
+    kpasteProg_group.add_option('-o', '--clipout', dest='clipout', help='save returned paste URL to X clipboard', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--selection', dest='selection', help='specify which X clipboard to use. valid options: "primary" (default; middle-mouse-button paste), "secondary" (uncommon), or "clipboard" (ctrl-v paste)', metavar='CLIP')
+    kpasteProg_group.add_option('', '--fullpath', dest='fullpath', help='use pathname VS basename for file description(s)', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--pasteself', dest='pasteself', help='paste this script itself', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--sysinfo', dest='sysinfo', help='paste system information', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--printonly', dest='printonly', help='print paste, but do not send', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--confirm', dest='confirm', help='print paste, and prompt for confirmation before sending', action="store_true", default=False)
+    kpasteProg_group.add_option('-g', '--get', dest='get', help='use GET protocol to upload paste (not recommended when using a password)', action="store_true", default=False)
+    parser.add_option_group(kpasteProg_group)
+
+    parser.set_defaults(project='', nick='', lang='text', expires = 86400, selection='primary')
+    (options, args) = parser.parse_args()
+
+    if options.lang.lower() == 'list':
+        print 'Valid language syntax options:'
+        for langCode, langDesc in validSyntaxOpts.iteritems():
+            print "%s - %s" % (langCode, langDesc)
+        sys.exit(0)
+    if options.clipin:
+        if not os.access('/usr/bin/xsel', os.X_OK):
+            # TODO: try falling back to xclip or dbus
+            parser.error('OOPS - the clipboard options currently depend on "/usr/bin/xsel", which does not appear to be installed')
+    if options.clipin and args:
+        parser.error("Sending both clipboard contents AND files is not supported. Use -i OR filename(s)")
+    if options.lang not in validSyntaxOpts:
+        parser.error("'%s' is not a valid language option. Please use kpaste -l list to see a full list of supported language codes." % options.lang)
+    if options.selection not in validClipboardSelectionOpts:
+        parser.error("'%s' is not a valid clipboard selection option.\n\tVALID OPTIONS: %s" % (optv, ', '.join(validClipboardSelectionOpts)))
+
+    fileargs = args
+    if options.fullpath:
+        fileargs = [os.path.abspath(x) for x in args]
+    else:
+        fileargs = [os.path.basename(x) for x in args]  # remove potentially non-anonymous path info from file path descriptions
+
+    #guess lang for some common file extensions, if all file exts similar, and lang not changed from default
+    if options.lang == 'text':
+        all_exts_similar = False
+        for i in range(0, len(args)):
+            all_exts_similar = True
+            ext = os.path.splitext(args[i])[1].lstrip(os.extsep)
+            if i > 0 and ext != ext_prev:
+                all_exts_similar = False
+                break
+            ext_prev = ext
+        if all_exts_similar and ext in ext2lang_map.keys():
+            options.lang = ext2lang_map[ext]
+
+    # get input from mutually exclusive sources, though they *could* be combined
+    text = ""
+    if options.clipin:
+        xselcmd = 'xsel -o --%s' % options.selection
+        #text = os.popen(xselcmd).read()
+        p = subprocess.Popen(xselcmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        (text, err) = p.communicate()
+        if p.returncode != 0:
+            if options.debug:
+                print >> sys.stderr, err
+            parser.error("'xsel' failure. this usually means you're not running X")
+        if not text:
+            parser.error("%s clipboard is empty" % options.selection)
+    elif options.pasteself:
+        text = open(sys.argv[0]).read()
+        options.project = 'kpaste'
+        options.lang = 'python'
+        options.nick = 'kpaste'
+    elif options.sysinfo:
+        text = sysinfo(options.debug)
+    elif not args:   # read from stdin if no file args supplied
+        try:
+            text += sys.stdin.read()
+        except KeyboardInterrupt:
+            print >> sys.stderr, "\nUSAGE REMINDER:\n   kpaste waits for input when run without file arguments.\n   Paste your text, then press <Ctrl-D> on a new line to upload.\n   Try `kpaste --help' for more information.\nExiting..."
+            sys.exit(1)
+    else:
+        for i, f in enumerate(args):
+            if not os.access(f, os.R_OK):
+                parser.error("file '%s' is not readable" % f)
+            if (len(args) > 1):     # separate multiple files with header
+                text += '#' * 78 + '\n'
+                text += '### file %d of %d: %s\n' % (i+1, len(args), fileargs[i])
+                text += '#' * 78 + '\n'
+            text += open(f).read()
+
+    password = ""
+    if options.password:
+        while password == "":
+            password = getpass.getpass('Enter password: ')
+        print password
+
+    if options.debug:
+        print 'nick: "%s"' % options.nick
+        print 'project: "%s"' % options.project
+        print 'lang: "%s"' % options.lang
+        print 'text (%d): "%s ..."' % (len(text), text[:80])
+
+    if options.printonly or options.confirm:
+        try:
+            if is_text(text):
+                print text   # when piped to less, sometimes fails with [Errno 32] Broken pipe
+            else:
+                print "DATA"
+        except IOError:
+            pass
+    if options.printonly:   # print only what would be sent, and exit
+        sys.exit(0)
+    elif options.confirm:   # print what would be sent, and ask for permission
+        if not confirm("OK to send?"):
+            sys.exit(1)
+
+    url = paste(text, options, password)
+    if url:
+        # try to save URL in clipboard, and warn but don't error
+        if options.clipout:
+            xselcmd = 'xsel -i --%s' % options.selection
+            #os.popen(xselcmd, 'wb').write(url)
+            p = subprocess.Popen(xselcmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+            (out, err) = p.communicate(input=url)
+            if p.returncode != 0:
+                if options.debug:
+                    print >> sys.stderr, err
+                #parser.error("'xsel' failure. this usually means you're not running X")
+                print >> sys.stderr, "WARNING: URL not saved to clipboard"
+
+        print url
+    else:
+        sys.exit(1)
+
+    if options.pasteself:
+        print >> sys.stderr, "install kpaste to local ~/bin dir by running:    mkdir -p ~/bin; curl " + url + "raw/ -o ~/kin/kpaste && chmod +x ~/bin/kpaste"
+
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    try:
+        if '--generate-man' in sys.argv:
+            generate_man_page()
+        else:
+            main()
+    except KeyboardInterrupt:
+        print "\ninterrupted."
+        sys.exit(1)

@@ -1,0 +1,11 @@
+KPaste is a command-line utility to paste to the kde pastebin, http://paste.kde.org.
+
+Syntax:
+$ kpaste file1 [file2 ...]
+
+or simply
+$ kpaste
+(takes input from stdin)
+
+You can select username, project name, expiry time. You can make private pastes by specifying a password. For all options, please run
+fpaste --help
