@@ -7,5 +7,9 @@ or simply
 $ kpaste
 (takes input from stdin)
 
+you can pipe output from other commands to kpaste too.
+Example:
+ifconfig | kpaste
+
 You can select username, project name, expiry time. You can make private pastes by specifying a password. For all options, please run
-fpaste --help
+kpaste --help
