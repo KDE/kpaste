@@ -434,7 +434,8 @@ Examples:
   dmesg | %prog
   (prog1; prog2; prog3) | kpaste
   %prog --sysinfo --confirm
-  %prog -n codemonkey -p kpaste -l python kpaste"""
+  %prog -n codemonkey -p kdelibs -l python trial.py
+  ifconfig | %prog -g"""
 
     parser = OptionParser(usage=usage, version='%prog '+VERSION)
     parser.add_option('', '--debug', dest='debug', help=SUPPRESS_HELP, action="store_true", default=False)
