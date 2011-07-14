@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 '''kpaste - a cli frontend for the paste.kde.org pastebin'''
 #
 # Copyright 2011 Tirtha Chatterjee <tirtha.p.chatterjee@gmail.com>
