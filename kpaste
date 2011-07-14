@@ -89,6 +89,9 @@ def paste(text, options, passw):
         req = urllib2.Request(url='http://paste.kde.org/index.php?' + params, headers={'User-agent': USER_AGENT})
     else:
         req = urllib2.Request(url='http://paste.kde.org/index.php', data=params, headers={'User-agent': USER_AGENT})
+    
+    if options.debug:
+        print 'request params:\n%s' % params
 
     if options.proxy:
         if options.debug:
