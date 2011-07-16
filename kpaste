@@ -22,6 +22,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 VERSION = '0.0.1'
 USER_AGENT = 'kpaste/' + VERSION
+PASTE_URL = "http://paste.kde.org/"
 
 import os, sys, urllib, urllib2, subprocess, json, getpass
 from optparse import OptionParser, OptionGroup, SUPPRESS_HELP
@@ -85,11 +86,11 @@ def paste(text, options, passw):
         if not confirm("Send binary data anyway?"):
             return False
 
-    if options.get or options.password == False:
-        req = urllib2.Request(url='http://paste.kde.org/index.php?' + params, headers={'User-agent': USER_AGENT})
+    if options.get:
+        req = urllib2.Request(url= PASTE_URL + '?' + params, headers={'User-agent': USER_AGENT})
     else:
-        req = urllib2.Request(url='http://paste.kde.org/index.php', data=params, headers={'User-agent': USER_AGENT})
-    
+        req = urllib2.Request(url=PASTE_URL, data=params, headers={'User-agent': USER_AGENT})
+
     if options.debug:
         print 'request params:\n%s' % params
 
@@ -126,7 +127,7 @@ def paste(text, options, passw):
         print errstring
         return False
     try:
-        url = "http://paste.kde.org/" + result['result']['id']
+        url = PASTE_URL + result['result']['id']
         if options.password:
             url += '/' + result['result']['hash']
         return url
@@ -460,17 +461,17 @@ Examples:
     kpasteProg_group = OptionGroup(parser, "Input/Output Options")
     kpasteProg_group.add_option('-i', '--clipin', dest='clipin', help='read paste text from current X clipboard selection', action="store_true", default=False)
     kpasteProg_group.add_option('-o', '--clipout', dest='clipout', help='save returned paste URL to X clipboard', action="store_true", default=False)
-    kpasteProg_group.add_option('', '--selection', dest='selection', help='specify which X clipboard to use. valid options: "primary" (default; middle-mouse-button paste), "secondary" (uncommon), or "clipboard" (ctrl-v paste)', metavar='CLIP')
+    kpasteProg_group.add_option('', '--selection', dest='selection', help='specify which X clipboard to use. valid options: "primary" (middle-mouse-button paste), "secondary" (uncommon), or "clipboard" (default; ctrl-v paste)', metavar='CLIP')
     kpasteProg_group.add_option('', '--fullpath', dest='fullpath', help='use pathname VS basename for file description(s)', action="store_true", default=False)
     kpasteProg_group.add_option('', '--pasteself', dest='pasteself', help='paste this script itself', action="store_true", default=False)
     kpasteProg_group.add_option('', '--sysinfo', dest='sysinfo', help='paste system information', action="store_true", default=False)
     kpasteProg_group.add_option('', '--printonly', dest='printonly', help='print paste, but do not send', action="store_true", default=False)
     kpasteProg_group.add_option('', '--confirm', dest='confirm', help='print paste, and prompt for confirmation before sending', action="store_true", default=False)
     kpasteProg_group.add_option('', '--noretry', dest='noretry', help='do not prompt for retry if paste fails', action="store_true", default=False)
-    kpasteProg_group.add_option('', '--get', dest='get', help='force the use of GET to paste (even when using a password)', action="store_true", default=False)
+    kpasteProg_group.add_option('', '--get', dest='get', help='force the use of GET to paste (not recommended when using a password)', action="store_true", default=False)
     parser.add_option_group(kpasteProg_group)
 
-    parser.set_defaults(project='', nick='', lang='text', expires = 86400, selection='primary')
+    parser.set_defaults(project='', nick='', lang='text', expires = 86400, selection='clipboard')
     (options, args) = parser.parse_args()
 
     if options.lang.lower() == 'list':
