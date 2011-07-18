@@ -1,1 +1,2 @@
 - Support for multiple backends
+- Check language by MIME type, not extension
