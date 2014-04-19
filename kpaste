@@ -70,14 +70,17 @@ def confirm(prompt = "OK?"):
 def paste(text, options, passw):
     '''send text to paste.kde.org and return the URL'''
     import re
+
+    CREATE_URL = PASTE_URL + '/api/json/create'
+
     if not text:
         print >> sys.stderr, "No text to send."
         return False
 
     if options.password and passw != None and passw != "":
-        params = urllib.urlencode({'paste_project': options.project, 'paste_user': options.nick, 'paste_password': passw, 'paste_private': 'yes', 'paste_lang': options.lang, 'paste_data': text, 'paste_expire': options.expires, 'api_submit': 'true', 'mode': 'json'})
+        params = urllib.urlencode({'project': options.project, 'password': passw, 'private': True, 'language': options.lang, 'data': text, 'expire': options.expires})
     else:
-        params = urllib.urlencode({'paste_project': options.project, 'paste_user': options.nick, 'paste_lang': options.lang, 'paste_data': text, 'paste_expire': options.expires, 'api_submit': 'true', 'mode': 'json'})
+        params = urllib.urlencode({'project': options.project, 'language': options.lang, 'data': text, 'expire': options.expires})
     pasteSizeKiB = len(params)/1024.0
 
     # verify that it's most likely *non-binary* data being sent.
@@ -87,9 +90,9 @@ def paste(text, options, passw):
             return False
 
     if options.get:
-        req = urllib2.Request(url= PASTE_URL + '?' + params, headers={'User-agent': USER_AGENT})
+        req = urllib2.Request(url=CREATE_URL + '?' + params, headers={'User-agent': USER_AGENT})
     else:
-        req = urllib2.Request(url=PASTE_URL, data=params, headers={'User-agent': USER_AGENT})
+        req = urllib2.Request(url=CREATE_URL, data=params, headers={'User-agent': USER_AGENT})
 
     if options.debug:
         print 'request params:\n%s' % params
