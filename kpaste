@@ -116,11 +116,6 @@ def paste(text, options, passw):
                 print f.read()
         return False
 
-    ##url = f.geturl()
-    #returnData = f.read()
-    #j = json.JSONDecoder()
-    #result = json.JSONDecoder.decode(j, returnData)
-    #print f.read()
     try:
         result = json.load(f)
     except ValueError:
