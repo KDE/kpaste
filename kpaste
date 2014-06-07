@@ -450,7 +450,7 @@ Examples:
     pasteKDEOrg_group = OptionGroup(parser, "paste.kde.org Options")
     pasteKDEOrg_group.add_option('-p', '--project', dest='project', help='project related to the paste, if any', metavar='"PROJECT"')
     pasteKDEOrg_group.add_option('-l', '--language', dest='lang', help='language of content for syntax highlighting; default is "%default"; use "kpaste -l list" to show all ' + str(len(validSyntaxOpts)) + ' supported langs', metavar='"LANGUAGE"')
-    pasteKDEOrg_group.add_option('-t', '--expires', dest='expires', help='time before paste is removed; default is %default seconds', metavar='EXPIRES')
+    pasteKDEOrg_group.add_option('-t', '--expires', dest='expires', help='time before paste is removed; default is %default seconds. Possible values are:  1800, 21600, 86400, 604800, 2592000, 31536000', metavar='EXPIRES')
     pasteKDEOrg_group.add_option('-x', '--password', dest='password', help='use a password', action="store_true", default=False)
 
     parser.add_option_group(pasteKDEOrg_group)
